@@ -179,13 +179,13 @@ defmodule Ecto.Repo.Schema do
           {updated_fields, updated_set} =
             Enum.map_reduce(args, MapSet.new(), fn {field, _}, set ->
               dumped_field = insert_all_select_dump!(field, dumper)
-              {dumped_field, MapSet.put(set, dumped_field)}
+              {dumped_field, MapSet.put(set, field)}
             end)
 
+          source_fields = Enum.take(fields, length(fields) - length(args))
+
           unchanged_fields =
-            for {{:., _, [{:&, _, [^ix]}, field]}, [], []} = expr <- fields,
-                not MapSet.member?(updated_set, field),
-                do: insert_all_select_dump!(expr)
+            insert_all_source_fields(query, ix, source_fields, updated_set, dumper)
 
           unchanged_fields ++ updated_fields
 
@@ -195,8 +195,8 @@ defmodule Ecto.Repo.Schema do
         %Ecto.Query.SelectExpr{take: %{^ix => {_fun, fields}}} ->
           Enum.map(fields, &insert_all_select_dump!(&1, dumper))
 
-        %Ecto.Query.SelectExpr{expr: {:&, _, [_ix]}, fields: fields} ->
-          Enum.map(fields, &insert_all_select_dump!(&1))
+        %Ecto.Query.SelectExpr{expr: {:&, _, [ix]}, fields: fields} ->
+          insert_all_source_fields(query, ix, fields, MapSet.new(), dumper)
 
         _ ->
           raise ArgumentError, """
@@ -342,6 +342,36 @@ defmodule Ecto.Repo.Schema do
     else
       field
     end
+  end
+
+  defp insert_all_source_fields(_query, _ix, fields, _updated_set, nil) do
+    Enum.map(fields, &insert_all_select_dump!/1)
+  end
+
+  defp insert_all_source_fields(query, ix, fields, updated_set, dumper) do
+    source_fields =
+      case elem(query.sources, ix) do
+        {_, schema, _} when is_atom(schema) and not is_nil(schema) ->
+          case query.select.take do
+            %{^ix => {_fun, selected_fields}} -> selected_fields
+            _ -> schema.__schema__(:query_fields)
+          end
+          |> Enum.reject(&MapSet.member?(updated_set, &1))
+
+        _ ->
+          Enum.map(fields, &insert_all_select_dump!/1)
+      end
+
+    if length(source_fields) != length(fields) do
+      raise ArgumentError,
+            "cannot generate a fields list for insert_all from the given source query: " <>
+              inspect(query)
+    end
+
+    Enum.zip_with(source_fields, fields, fn field, expr ->
+      insert_all_select_dump!(expr)
+      insert_all_select_dump!(field, dumper)
+    end)
   end
 
   defp insert_all_select_dump!(field, dumper) when is_atom(field) do

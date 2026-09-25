@@ -211,6 +211,46 @@ defmodule Ecto.RepoTest do
     end
   end
 
+  defmodule InsertSelectSource do
+    use Ecto.Schema
+
+    @primary_key false
+    schema "insert_select_source" do
+      field :name, :string
+      field :value, :string
+    end
+  end
+
+  defmodule InsertSelectMappedSource do
+    use Ecto.Schema
+
+    @primary_key false
+    schema "insert_select_source" do
+      field :name, :string, source: :source_name
+      field :value, :string
+    end
+  end
+
+  defmodule InsertSelectRenamed do
+    use Ecto.Schema
+
+    @primary_key false
+    schema "insert_select_renamed" do
+      field :name, :string, source: :renamed_name
+      field :value, :string
+    end
+  end
+
+  defmodule InsertSelectReadOnly do
+    use Ecto.Schema
+
+    @primary_key false
+    schema "insert_select_read_only" do
+      field :name, :string, writable: :never
+      field :value, :string
+    end
+  end
+
   test "defines child_spec/1" do
     assert TestRepo.child_spec([]) == %{
              id: TestRepo,
@@ -763,6 +803,52 @@ defmodule Ecto.RepoTest do
                        {%Ecto.Query{}, _params}}
 
       assert header == [:id, :x, :yyy, :z, :array, :map]
+    end
+
+    test "maps full source fields through the destination schema" do
+      query = from s in InsertSelectSource, select: s
+      TestRepo.insert_all(InsertSelectRenamed, query)
+
+      assert_received {:insert_all, %{header: [:renamed_name, :value]}, {%Ecto.Query{}, _params}}
+    end
+
+    test "keeps source columns when the destination has no schema" do
+      query = from s in InsertSelectMappedSource, select: s
+      TestRepo.insert_all("insert_select_renamed", query)
+
+      assert_received {:insert_all, %{header: [:source_name, :value]},
+                       {%Ecto.Query{}, _params}}
+    end
+
+    test "rejects full source fields that are unwritable in the destination" do
+      query = from s in InsertSelectSource, select: s
+
+      assert_raise ArgumentError,
+                   "cannot select unwritable field `:name` for insert_all",
+                   fn -> TestRepo.insert_all(InsertSelectReadOnly, query) end
+    end
+
+    test "maps unchanged map update fields through the destination schema" do
+      query = from s in InsertSelectMappedSource, select: %{s | value: s.value}
+      TestRepo.insert_all(InsertSelectRenamed, query)
+
+      assert_received {:insert_all, %{header: [:renamed_name, :value]}, {%Ecto.Query{}, _params}}
+    end
+
+    test "does not include an overwritten source field twice when columns differ" do
+      query = from s in InsertSelectMappedSource, select: %{s | name: s.name}
+      TestRepo.insert_all(InsertSelectRenamed, query)
+
+      assert_received {:insert_all, %{header: [:value, :renamed_name]},
+                       {%Ecto.Query{}, _params}}
+    end
+
+    test "rejects unchanged map update fields that are unwritable in the destination" do
+      query = from s in InsertSelectMappedSource, select: %{s | value: s.value}
+
+      assert_raise ArgumentError,
+                   "cannot select unwritable field `:name` for insert_all",
+                   fn -> TestRepo.insert_all(InsertSelectReadOnly, query) end
     end
 
     test "takes query selecting on source with join" do
