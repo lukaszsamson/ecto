@@ -231,6 +231,16 @@ defmodule Ecto.RepoTest do
     end
   end
 
+  defmodule InsertSelectReadOnlySource do
+    use Ecto.Schema
+
+    @primary_key false
+    schema "insert_select_source" do
+      field :name, :string, writable: :never
+      field :value, :string
+    end
+  end
+
   defmodule InsertSelectRenamed do
     use Ecto.Schema
 
@@ -828,8 +838,22 @@ defmodule Ecto.RepoTest do
                    fn -> TestRepo.insert_all(InsertSelectReadOnly, query) end
     end
 
+    test "can read an unwritable source field into a writable destination" do
+      query = from s in InsertSelectReadOnlySource, select: s
+      TestRepo.insert_all(InsertSelectRenamed, query)
+
+      assert_received {:insert_all, %{header: [:renamed_name, :value]}, {%Ecto.Query{}, _params}}
+    end
+
     test "maps unchanged map update fields through the destination schema" do
       query = from s in InsertSelectMappedSource, select: %{s | value: s.value}
+      TestRepo.insert_all(InsertSelectRenamed, query)
+
+      assert_received {:insert_all, %{header: [:renamed_name, :value]}, {%Ecto.Query{}, _params}}
+    end
+
+    test "maps unchanged fields from a map subset through the destination schema" do
+      query = from s in InsertSelectMappedSource, select: %{map(s, [:name]) | value: s.value}
       TestRepo.insert_all(InsertSelectRenamed, query)
 
       assert_received {:insert_all, %{header: [:renamed_name, :value]}, {%Ecto.Query{}, _params}}
@@ -849,6 +873,14 @@ defmodule Ecto.RepoTest do
       assert_raise ArgumentError,
                    "cannot select unwritable field `:name` for insert_all",
                    fn -> TestRepo.insert_all(InsertSelectReadOnly, query) end
+    end
+
+    test "rejects map updates whose values expand to multiple select fields" do
+      query = from s in InsertSelectSource, select: %{s | value: {s.name, s.value}}
+
+      assert_raise ArgumentError,
+                   ~r/cannot generate a fields list for insert_all from the given source query:/,
+                   fn -> TestRepo.insert_all(InsertSelectRenamed, query) end
     end
 
     test "takes query selecting on source with join" do
